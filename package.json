@@ -1,0 +1,19 @@
+{
+  "name": "express-jwt",
+  "version": "1.0.0",
+  "description": "Simple implementation of jwt token using Express.js\"",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "watch": "node --watch src/index.js"
+  },
+  "type": "module",
+  "author": "Taras Korpach",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.3"
+  }
+}
