@@ -3,9 +3,15 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from './model/user.js';
 import bcrypt from 'bcrypt';
+import passport from 'passport';
+import { Strategy, ExtractJwt } from 'passport-jwt';
+import LocalStrategy from 'passport-local';
 
 const app = express();
 const port = process.env.PORT;
+const key = process.env.JWT_KEY;
+
+app.use(express.json());
 
 try {
   await mongoose.connect(process.env.MONGO_DB);
@@ -14,9 +20,48 @@ try {
   process.exit(1);
 }
 
-app.use(express.json());
+passport.use(
+  'local',
+  new LocalStrategy(async function verify(username, password, cb) {
+    const user = await User.findOne({
+      username: username,
+    });
 
-const key = process.env.JWT_KEY;
+    if (user) {
+      const pass = user.password;
+      const compare = await bcrypt.compare(password, pass);
+
+      if (!compare) {
+        return cb(null, false, { message: 'Incorrect username or password.' });
+      }
+
+      return cb(null, user.toObject());
+    } else {
+      return cb('User does not exists.');
+    }
+  })
+);
+
+passport.use(
+  'jwt',
+  new Strategy(
+    {
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: key,
+    },
+    async function (jwt_payload, done) {
+      const user = await User.findOne({
+        username: jwt_payload.username,
+      });
+
+      if (user) {
+        return done(null, user.toObject());
+      } else {
+        return done(null, false);
+      }
+    }
+  )
+);
 
 app.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
@@ -58,61 +103,39 @@ app.post('/register', async (req, res) => {
   }
 });
 
-app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
+app.post(
+  '/login',
+  passport.authenticate('local', { session: false }),
+  async (req, res) => {
+    const user = req.user;
 
-  if (!username || !password) {
-    return res
-      .status(400)
-      .json({ error: 'You must provide username, email and password' });
+    const token = jwt.sign(
+      {
+        username: user.username,
+        email: user.email,
+      },
+      key,
+      { expiresIn: '1h' }
+    );
+
+    return res.status(201).json({
+      token_type: 'Bearer',
+      expires_in: 3599,
+      ext_expires_in: 3599,
+      access_token: token,
+    });
   }
+);
 
-  const user = await User.findOne({
-    username: username,
-  });
+app.get(
+  '/profile',
+  passport.authenticate('jwt', { session: false }),
+  (req, res) => {
+    const { _id, password, __v, ...result } = req.user;
 
-  if (user) {
-    const pass = user.password;
-    const compare = await bcrypt.compare(password, pass);
-
-    if (compare) {
-      const token = jwt.sign(
-        {
-          username: username,
-          email: user.email,
-        },
-        key,
-        { expiresIn: '1h' }
-      );
-
-      return res.status(201).json({
-        token_type: 'Bearer',
-        expires_in: 3599,
-        ext_expires_in: 3599,
-        access_token: token,
-      });
-    }
+    return res.json(result);
   }
-
-  return res.status(401).json({ error: 'Email or password is wrong.' });
-});
-
-app.get('/protected', (req, res) => {
-  let token = req.header('Authorization');
-
-  if (token) {
-    token = token.replace(/^Bearer\s+/, '');
-
-    try {
-      jwt.verify(token, key);
-      return res.status(200).json({ message: 'Protected route accesed' });
-    } catch (e) {
-      return res.status(401).json({ err: e.message });
-    }
-  }
-
-  return res.status(401).json({ err: 'Access denied.' });
-});
+);
 
 app.listen(port, () => {
   console.log(`App listening on port ${port}...`);
