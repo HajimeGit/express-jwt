@@ -1,15 +1,14 @@
 import express from 'express';
-import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from './model/user.js';
 import bcrypt from 'bcrypt';
 import passport from 'passport';
-import { Strategy, ExtractJwt } from 'passport-jwt';
 import LocalStrategy from 'passport-local';
+import session from 'express-session';
+import MongoStore from 'connect-mongo';
 
 const app = express();
 const port = process.env.PORT;
-const key = process.env.JWT_KEY;
 
 app.use(express.json());
 
@@ -19,6 +18,18 @@ try {
   console.error('Failed to connect to MongoDB:', err.message);
   process.exit(1);
 }
+
+app.use(
+  session({
+    secret: process.env.JWT_KEY,
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_DB,
+      collectionName: 'sessions',
+    }),
+  })
+);
+
+app.use(passport.session());
 
 passport.use(
   'local',
@@ -42,26 +53,21 @@ passport.use(
   })
 );
 
-passport.use(
-  'jwt',
-  new Strategy(
-    {
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: key,
-    },
-    async function (jwt_payload, done) {
-      const user = await User.findOne({
-        username: jwt_payload.username,
-      });
+passport.serializeUser(function (user, cb) {
+  process.nextTick(function () {
+    return cb(null, {
+      id: user._id.toString(),
+      username: user.username,
+      email: user.email,
+    });
+  });
+});
 
-      if (user) {
-        return done(null, user.toObject());
-      } else {
-        return done(null, false);
-      }
-    }
-  )
-);
+passport.deserializeUser(function (user, cb) {
+  process.nextTick(function () {
+    return cb(null, user);
+  });
+});
 
 app.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
@@ -83,59 +89,44 @@ app.post('/register', async (req, res) => {
   const saved = await user.save();
 
   if (saved) {
-    const token = jwt.sign(
+    req.logIn(
       {
-        username: username,
-        email: email,
+        username,
+        email,
+        _id: user._id,
       },
-      key,
-      { expiresIn: '1h' }
+      () => {
+        res.redirect('/');
+      }
     );
-
-    res.status(201).json({
-      token_type: 'Bearer',
-      expires_in: 3599,
-      ext_expires_in: 3599,
-      access_token: token,
-    });
   } else {
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
-app.post(
-  '/login',
-  passport.authenticate('local', { session: false }),
-  async (req, res) => {
-    const user = req.user;
+app.post('/login', passport.authenticate('local'), async (req, res) => {
+  return res.status(200).json(req.session.passport.user);
+});
 
-    const token = jwt.sign(
-      {
-        username: user.username,
-        email: user.email,
-      },
-      key,
-      { expiresIn: '1h' }
-    );
-
-    return res.status(201).json({
-      token_type: 'Bearer',
-      expires_in: 3599,
-      ext_expires_in: 3599,
-      access_token: token,
-    });
+const loggedIn = (req, res, next) => {
+  if (!req.isAuthenticated || !req.isAuthenticated()) {
+    return res.status(403).json({ error: 'Access denied' });
   }
-);
+  next();
+};
 
-app.get(
-  '/profile',
-  passport.authenticate('jwt', { session: false }),
-  (req, res) => {
-    const { _id, password, __v, ...result } = req.user;
+app.get('/', loggedIn, (req, res) => {
+  return res.json(req.user);
+});
 
-    return res.json(result);
-  }
-);
+app.post('/logout', (req, res) => {
+  req.logout(function (err) {
+    if (err) {
+      return next(err);
+    }
+    res.json({ message: 'You are logged out succesfully.' });
+  });
+});
 
 app.listen(port, () => {
   console.log(`App listening on port ${port}...`);

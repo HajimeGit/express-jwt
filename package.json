@@ -4,19 +4,19 @@
   "description": "Simple implementation of jwt token using Express.js\"",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "watch": "node --watch src/index.js"
+    "start": "node --env-file=.env src/index.js",
+    "watch": "node --env-file=.env --watch src/index.js"
   },
   "type": "module",
   "author": "Taras Korpach",
   "license": "ISC",
   "dependencies": {
     "bcrypt": "^5.1.1",
+    "connect-mongo": "^5.1.0",
     "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
+    "express-session": "^1.18.0",
     "mongoose": "^8.5.3",
     "passport": "^0.7.0",
-    "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0"
   }
 }
