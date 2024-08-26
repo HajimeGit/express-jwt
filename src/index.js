@@ -1,16 +1,16 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import User from './model/user.js';
-import bcrypt from 'bcrypt';
+import Account from './model/account.js';
 import passport from 'passport';
-import LocalStrategy from 'passport-local';
+import Strategy from 'passport-google-oidc';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
 
 const app = express();
 const port = process.env.PORT;
 
-app.use(express.json());
+app.use('/', express.json());
 
 try {
   await mongoose.connect(process.env.MONGO_DB);
@@ -31,35 +31,66 @@ app.use(
 
 app.use(passport.session());
 
+const redirectURL = '/oauth2/redirect/google';
+
 passport.use(
-  'local',
-  new LocalStrategy(async function verify(username, password, cb) {
-    const user = await User.findOne({
-      username: username,
-    });
+  'google',
+  new Strategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: 'http://localhost:3000' + redirectURL,
+      scope: ['email', 'profile'],
+    },
+    async (issuer, profile, cb) => {
+      const { emails, id, displayName } = profile;
 
-    if (user) {
-      const pass = user.password;
-      const compare = await bcrypt.compare(password, pass);
+      const account = await Account.findOne({
+        provider: issuer,
+        subject: id,
+      }).populate('userId');
 
-      if (!compare) {
-        return cb(null, false, { message: 'Incorrect username or password.' });
+      if (account) {
+        return cb(null, account.userId.toObject());
+      } else {
+        let [email] = emails;
+        const user = new User({
+          username: displayName,
+          email: email.value,
+        });
+
+        const result = await user.save();
+
+        if (result) {
+          const newAcc = new Account({
+            provider: issuer,
+            subject: id,
+            userId: user._id,
+          });
+
+          await newAcc.save();
+          return cb(null, user);
+        }
       }
-
-      return cb(null, user.toObject());
-    } else {
-      return cb('User does not exists.');
     }
-  })
+  )
+);
+
+app.get('/login/oauth2/google', passport.authenticate('google'));
+app.get(
+  redirectURL,
+  passport.authenticate('google', {
+    failureRedirect: '/login',
+    failureMessage: true,
+  }),
+  (req, res) => {
+    res.redirect('/');
+  }
 );
 
 passport.serializeUser(function (user, cb) {
   process.nextTick(function () {
-    return cb(null, {
-      id: user._id.toString(),
-      username: user.username,
-      email: user.email,
-    });
+    return cb(null, user);
   });
 });
 
@@ -69,47 +100,8 @@ passport.deserializeUser(function (user, cb) {
   });
 });
 
-app.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
-
-  if (!username || !email || !password) {
-    return res
-      .status(400)
-      .json({ error: 'You must provide username, email and password' });
-  }
-
-  const hashedPass = await bcrypt.hash(password, 10);
-
-  const user = new User({
-    username,
-    email,
-    password: hashedPass,
-  });
-
-  const saved = await user.save();
-
-  if (saved) {
-    req.logIn(
-      {
-        username,
-        email,
-        _id: user._id,
-      },
-      () => {
-        res.redirect('/');
-      }
-    );
-  } else {
-    res.status(500).json({ error: 'Something went wrong. Please try again.' });
-  }
-});
-
-app.post('/login', passport.authenticate('local'), async (req, res) => {
-  return res.status(200).json(req.session.passport.user);
-});
-
 const loggedIn = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated()) {
+  if (!req?.isAuthenticated || !req.isAuthenticated()) {
     return res.status(403).json({ error: 'Access denied' });
   }
   next();
@@ -119,7 +111,7 @@ app.get('/', loggedIn, (req, res) => {
   return res.json(req.user);
 });
 
-app.post('/logout', (req, res) => {
+app.get('/logout', (req, res) => {
   req.logout(function (err) {
     if (err) {
       return next(err);
